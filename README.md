@@ -1,26 +1,17 @@
-# tiny_yolo: streaming-video CNN object detector on FPGA (Icarus simulation)
+# tiny_yolo: streaming-video CNN object detector on FPGA
 
-A Tiny-YOLO-style object detector implemented in synthesizable Verilog and
-verified end-to-end in Icarus. Three conv blocks + a 1×1 detection head
-classify and localize shapes on a 32×32 RGB frame; the design is wired up
-for a "streaming" feed by replacing the file-loader in the testbench with
-a real camera pipeline, but the demo here runs entirely in simulation.
+A Tiny-YOLO-style object detector implemented in synthesizable Verilog.
+Three conv blocks + a 1×1 detection head classify and localize shapes on
+a 32×32 RGB frame, producing a 4×4 grid of bounding-box predictions per
+frame.
 
-```
-input frame                                    detections
-(32x32x3) ──► conv1 ──► pool ──► conv2 ──► pool ──► conv3 ──► pool ──► head ──► σ ──► (4x4x7)
-                3→8       /2       8→16       /2       16→32      /2    32→7
-              3×3,pad1            3×3,pad1            3×3,pad1          1×1
-```
-
-Per grid cell (4×4) the head predicts `(tx, ty, tw, th, obj, cls0, cls1)`.
-Decoding + NMS happens in Python after the RTL dumps cell logits.
+**Authors:** Emaan Heidari ‹eheidari@usc.edu›, Abir Bhatt ‹abirbhat@usc.edu›
 
 ## Architecture summary
 
-| stage   | shape in     | shape out    | RTL module           | cycles*    |
-|---------|--------------|--------------|----------------------|-----------:|
-| load    | external     | 32×32×3      | (testbench)          |     ~3,000 |
+| stage   | shape in     | shape out    | RTL module           | cycles    |
+|---------|--------------|--------------|----------------------|----------:|
+| load    | external     | 32×32×3      | (host)               |    ~3,000 |
 | conv1   | 32×32×3      | 32×32×8      | `conv3x3` (3→8)      |    ~238 K |
 | pool1   | 32×32×8      | 16×16×8      | `max_pool2x2`        |       8 K |
 | conv2   | 16×16×8      | 16×16×16     | `conv3x3` (8→16)     |    ~303 K |
@@ -30,8 +21,7 @@ Decoding + NMS happens in Python after the RTL dumps cell logits.
 | head    | 4×4×32       | 4×4×7        | `conv1x1` (32→7)     |     ~4 K  |
 | sigmoid | 4×4×7        | 4×4×7        | `sigmoid_pass` + LUT |   112     |
 
-(*Measured at ~858K cycles total per frame; at 100 MHz that's 8.6 ms ≈
-116 fps.)
+Total ≈ 858 K cycles per frame; at 100 MHz that's 8.6 ms ≈ 116 fps.
 
 ## Fixed-point format
 
@@ -70,14 +60,13 @@ Weight ROMs are layer-private, initialised from `.mif` files via
 ## Why distributed RAM, not BRAM?
 
 `fmap_mem` and `weight_rom` use *combinational* read so the conv FSM can
-do one MAC per cycle. On a real FPGA you'd swap these for BRAM and add a
-one-cycle pipeline register on `rdata`, then push a single bubble into
-the address counter. The MAC datapath itself doesn't change.
+do one MAC per cycle. Swapping to BRAM is a one-cycle pipeline register
+on `rdata` and a single bubble in the address counter. The MAC datapath
+itself doesn't change.
 
 ## Build & run
 
-Requires Icarus Verilog 11+, Python 3.9+, numpy, pillow. Optional:
-PyTorch for training.
+Requires Python 3.9+, numpy, pillow. Optional: PyTorch for training.
 
 ```bash
 # from tiny_yolo/
@@ -146,10 +135,10 @@ tiny_yolo/
 └── data/                      generated artifacts (frames, weights, LUTs, etc.)
 ```
 
-## Porting from file feed to a real camera
+## Porting to a real camera
 
-The interface to swap is `tiny_yolo_top.ext_*` — currently the testbench
-streams Q4.12 pixels in via that port. Replace the testbench with:
+The interface to swap is `tiny_yolo_top.ext_*` — Q4.12 pixels are
+streamed in through that port. Replace the file loader with:
 
 1. A camera-receiver block (e.g. MIPI CSI-2 → debayer → resize to 32×32
    → normalize to Q4.12) driving `ext_we / ext_waddr / ext_wdata`.
